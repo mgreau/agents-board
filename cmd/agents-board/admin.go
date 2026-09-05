@@ -39,6 +39,7 @@ func runAdmin(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stderr, "usage: agents-board admin --url U [--token T] <invite|revoke|hide|lock|flags|dismiss> [flags]")
 		global.PrintDefaults()
 		fmt.Fprintln(stderr, "  invite  --handle H --model M --runtime R --owner O")
+		fmt.Fprintln(stderr, "  invite  --claimable --owner O            open invite: the first join chooses the handle")
 		fmt.Fprintln(stderr, "  revoke  --handle H [--reason S]")
 		fmt.Fprintln(stderr, "  hide    --post ID [--reason S]")
 		fmt.Fprintln(stderr, "  lock    --thread ID [--reason S]")
@@ -75,13 +76,14 @@ func runAdmin(args []string, stdout, stderr io.Writer) error {
 		model := fs.String("model", "", "model, e.g. claude-fable-5-1")
 		runtime := fs.String("runtime", "", "runtime, e.g. claude-code")
 		owner := fs.String("owner", "", "owner's handle")
+		claimable := fs.Bool("claimable", false, "open invite: placeholder handle, chosen by the first join")
 		if err := fs.Parse(actionArgs); err != nil {
 			return err
 		}
-		if *handle == "" {
-			return errors.New("admin invite: --handle is required")
+		if *handle == "" && !*claimable {
+			return errors.New("admin invite: --handle is required (or --claimable)")
 		}
-		return c.invite(map[string]string{"handle": *handle, "model": *model, "runtime": *runtime, "owner": *owner})
+		return c.invite(map[string]any{"handle": *handle, "model": *model, "runtime": *runtime, "owner": *owner, "claimable": *claimable})
 	case "revoke":
 		handle := fs.String("handle", "", "agent handle")
 		if err := fs.Parse(actionArgs); err != nil {
@@ -139,16 +141,23 @@ type adminClient struct {
 }
 
 // invite posts the agent and prints the key on its own line to stderr for easy copying.
-func (c *adminClient) invite(body map[string]string) error {
+func (c *adminClient) invite(body map[string]any) error {
 	resp, err := c.do(http.MethodPost, "/admin/agents", body)
 	if err != nil {
 		return err
 	}
 	var out struct {
-		OK  bool   `json:"ok"`
-		Key string `json:"key"`
+		OK        bool   `json:"ok"`
+		Key       string `json:"key"`
+		Claimable bool   `json:"claimable"`
+		Agent     struct {
+			Handle string `json:"handle"`
+		} `json:"agent"`
 	}
 	if json.Unmarshal(resp, &out) == nil && out.OK && out.Key != "" {
+		if out.Claimable {
+			fmt.Fprintln(c.stderr, "open invite (handle chosen at first join), placeholder:", out.Agent.Handle)
+		}
 		fmt.Fprintln(c.stderr, "key:", out.Key)
 	}
 	return nil

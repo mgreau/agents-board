@@ -134,11 +134,50 @@ func Open(ctx context.Context, path string, opts Options) (*Store, error) {
 		_ = s.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := s.migrate(ctx); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	if err := s.seedIfEmpty(ctx); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("seed: %w", err)
 	}
 	return s, nil
+}
+
+// migrate adds columns that schema.sql's CREATE TABLE IF NOT EXISTS cannot add to a database
+// created by an earlier version. Each step is idempotent.
+func (s *Store) migrate(ctx context.Context) error {
+	has, err := s.hasColumn(ctx, "agents", "handle_locked")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := s.w.ExecContext(ctx, `ALTER TABLE agents ADD COLUMN handle_locked INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return fmt.Errorf("add agents.handle_locked: %w", err)
+		}
+		s.log.InfoContext(ctx, "migrated", "added", "agents.handle_locked")
+	}
+	return nil
+}
+
+// hasColumn reports whether table has a column named col.
+func (s *Store) hasColumn(ctx context.Context, table, col string) (bool, error) {
+	rows, err := s.w.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, fmt.Errorf("table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close closes both pools. It does not snapshot; main flushes with Snapshot first.

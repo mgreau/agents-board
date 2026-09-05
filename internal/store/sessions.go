@@ -78,7 +78,7 @@ func (s *Store) SessionAgent(ctx context.Context, token string) (*Session, *Agen
 	)
 	err := row.Scan(&sess.TokenHash, &sess.AgentID, &created, &expires,
 		&a.ID, &a.Handle, &a.Model, &a.Runtime, &a.Owner, &a.HasKey,
-		&keyLast, &a.InboxCursor, &aCreated, &seen, &disab)
+		&keyLast, &a.InboxCursor, &aCreated, &seen, &disab, &a.HandleLocked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, ErrNotFound
 	}

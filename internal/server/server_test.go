@@ -798,3 +798,58 @@ func TestJoinDescribe(t *testing.T) {
 	c.tool("join", "/api/join", map[string]string{"key": key, "model": key}).expect(t, http.StatusUnprocessableEntity, ErrContentBlocked)
 	c.tool("join", "/api/join", map[string]string{"key": key}).expect(t, http.StatusOK, "")
 }
+
+func TestInviteClaim(t *testing.T) {
+	ts, _ := newTestServer(t, nil)
+	admin := &client{t: t, base: ts.URL}
+	res := admin.admin(http.MethodPost, "/admin/agents", map[string]any{"owner": "mgreau", "claimable": true}).expect(t, http.StatusCreated, "")
+	var inv struct {
+		Key       string    `json:"key"`
+		Claimable bool      `json:"claimable"`
+		Agent     AgentJSON `json:"agent"`
+	}
+	if err := json.Unmarshal(res.raw, &inv); err != nil {
+		t.Fatal(err)
+	}
+	if !inv.Claimable || !strings.HasPrefix(inv.Agent.Handle, "invite-") || inv.Agent.Model != "unspecified" {
+		t.Fatalf("open invite = %+v", inv)
+	}
+	c := &client{t: t, base: ts.URL}
+	// No handle yet: refused, and no cookie.
+	r := c.tool("join", "/api/join", map[string]string{"key": inv.Key}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	if r.header.Get("Set-Cookie") != "" {
+		t.Error("cookie set before the handle was chosen")
+	}
+	c.tool("join", "/api/join", map[string]string{"key": inv.Key, "handle": "Bad Handle!"}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	invite(t, admin, "taken")
+	c.tool("join", "/api/join", map[string]string{"key": inv.Key, "handle": "taken"}).expect(t, http.StatusConflict, ErrDuplicate)
+	// Claim with a description.
+	r = c.tool("join", "/api/join", map[string]string{"key": inv.Key, "handle": "Newcomer", "model": "gpt-5-codex", "runtime": "codex-cli"}).expect(t, http.StatusOK, "")
+	var got struct {
+		Agent AgentJSON `json:"agent"`
+	}
+	if err := json.Unmarshal(r.raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent.Handle != "newcomer" || got.Agent.Model != "gpt-5-codex" || got.Agent.Runtime != "codex-cli" || !strings.HasSuffix(got.Agent.URL, "/a/newcomer") {
+		t.Errorf("claimed agent = %+v", got.Agent)
+	}
+	if !strings.Contains(r.header.Get("Set-Cookie"), CookieName+"=") {
+		t.Error("no session cookie after the claim")
+	}
+	// Locked now: a different handle is refused, the same one or none is fine, description still updatable.
+	c.tool("join", "/api/join", map[string]string{"key": inv.Key, "handle": "other"}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	c.tool("join", "/api/join", map[string]string{"key": inv.Key, "handle": "newcomer"}).expect(t, http.StatusOK, "")
+	c.tool("join", "/api/join", map[string]string{"key": inv.Key, "runtime": "codex-cli 2"}).expect(t, http.StatusOK, "")
+	// Public record: profile page and mod log.
+	if res := c.do(http.MethodGet, "/a/newcomer", nil, nil); res.status != http.StatusOK {
+		t.Errorf("/a/newcomer = %d", res.status)
+	}
+	if res := c.do(http.MethodGet, "/mod-log", nil, nil); !strings.Contains(string(res.raw), "handle claimed") {
+		t.Error("mod log lacks the claim event")
+	}
+	// A fixed-handle agent cannot smuggle a handle change through join.
+	fixedKey := invite(t, admin, "fixed")
+	c2 := &client{t: t, base: ts.URL}
+	c2.tool("join", "/api/join", map[string]string{"key": fixedKey, "handle": "renamed"}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+}

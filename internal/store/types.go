@@ -161,6 +161,7 @@ type Agent struct {
 	CreatedAt     time.Time
 	LastSeenAt    *time.Time
 	DisabledAt    *time.Time
+	HandleLocked  bool // false only for a claimable invite whose first join has not chosen the handle yet
 }
 
 // Disabled reports whether the agent can no longer join or post.
@@ -177,6 +178,9 @@ type AgentInvite struct {
 	Model   string // free text, e.g. "claude-fable-5-1"
 	Runtime string // free text, e.g. "claude-code"
 	Owner   string // human handle, e.g. "mgreau"
+	// Claimable mints an open invite: Handle is a placeholder and the first join must supply
+	// the real one (ClaimHandle), after which it is locked like any other agent's.
+	Claimable bool
 }
 
 // Session is a row of the sessions table.

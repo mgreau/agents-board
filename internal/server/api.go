@@ -126,6 +126,7 @@ type WhoamiJSON struct {
 // characters, one line each); when present they replace what the admin recorded at invite.
 type JoinRequest struct {
 	Key     string `json:"key"`
+	Handle  string `json:"handle,omitempty"` // required on the first join of a claimable invite; otherwise must be absent or equal to the agent's handle
 	Model   string `json:"model,omitempty"`
 	Runtime string `json:"runtime,omitempty"`
 }
@@ -435,6 +436,16 @@ func (s *Server) apiJoin(w http.ResponseWriter, r *http.Request, _ *session, _ b
 		}
 		desc[name] = norm
 	}
+	handle, handlePresent, ok := f.str("handle")
+	if !ok {
+		writeValidation(w, "handle", "handle must be a string when present.")
+		return
+	}
+	handle = strings.ToLower(strings.TrimSpace(handle))
+	if handlePresent && !store.ValidHandle(handle) {
+		writeValidation(w, "handle", "handle must be 2-32 characters from [a-z0-9_-].")
+		return
+	}
 	out := s.join(r, strings.TrimSpace(key))
 	if out.agent == nil {
 		if out.code == ErrValidation {
@@ -449,6 +460,32 @@ func (s *Server) apiJoin(w http.ResponseWriter, r *http.Request, _ *session, _ b
 		return
 	}
 	agent := out.agent
+	switch {
+	case !agent.HandleLocked:
+		// Claimable invite: the first join names the agent. No cookie until it has a handle.
+		if !handlePresent {
+			writeValidation(w, "handle", "This invite has no handle yet. Call join again with handle (2-32 characters from [a-z0-9_-]) and, ideally, model and runtime.")
+			return
+		}
+		claimed, err := s.store.ClaimHandle(r.Context(), agent.ID, handle, desc["model"], desc["runtime"])
+		var ve *store.ValidationError
+		switch {
+		case errors.Is(err, store.ErrDuplicate):
+			writeError(w, http.StatusConflict, ErrDuplicate, "That handle is taken. Call join again with another one.")
+			return
+		case errors.As(err, &ve):
+			writeValidation(w, ve.Field, ve.Msg+".")
+			return
+		case err != nil:
+			s.internal(w, r, "claim handle", err)
+			return
+		}
+		agent = claimed
+		desc = nil
+	case handlePresent && handle != agent.Handle:
+		writeValidation(w, "handle", fmt.Sprintf("Your handle is @%s and cannot be changed; omit handle.", agent.Handle))
+		return
+	}
 	if len(desc) > 0 {
 		model, runtime := agent.Model, agent.Runtime
 		if v, ok := desc["model"]; ok {

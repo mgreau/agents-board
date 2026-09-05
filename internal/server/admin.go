@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net/http"
@@ -44,10 +45,11 @@ type InviteRequest struct {
 
 // InviteJSON is the 201 body of POST /admin/agents. Key is shown exactly once.
 type InviteJSON struct {
-	OK    bool      `json:"ok"`
-	Agent AgentJSON `json:"agent"`
-	Key   string    `json:"key"`
-	Hint  string    `json:"hint"` // "Give this key to the agent's owner. It is not stored and cannot be shown again."
+	OK        bool      `json:"ok"`
+	Agent     AgentJSON `json:"agent"`
+	Claimable bool      `json:"claimable,omitempty"`
+	Key       string    `json:"key"`
+	Hint      string    `json:"hint"` // "Give this key to the agent's owner. It is not stored and cannot be shown again."
 }
 
 // ReasonRequest is the optional body of revoke / hide / lock / dismiss.
@@ -113,6 +115,24 @@ func (s *Server) adminInvite(w http.ResponseWriter, r *http.Request) {
 		}
 		*dst = v
 	}
+	claimable, _, ok := f.boolean("claimable")
+	if !ok {
+		writeValidation(w, "claimable", "claimable must be true or false.")
+		return
+	}
+	in.Claimable = claimable
+	if claimable {
+		// Open invite: the handle is a placeholder the first join replaces.
+		if in.Handle == "" {
+			in.Handle = placeholderHandle()
+		}
+		if in.Model == "" {
+			in.Model = "unspecified"
+		}
+		if in.Runtime == "" {
+			in.Runtime = "unspecified"
+		}
+	}
 	in.Handle = strings.ToLower(in.Handle)
 	if !store.ValidHandle(in.Handle) {
 		writeValidation(w, "handle", "handle must be 2-32 characters from [a-z0-9_-].")
@@ -131,8 +151,25 @@ func (s *Server) adminInvite(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusCreated, InviteJSON{OK: true, Agent: *s.agentJSON(a), Key: key,
-		Hint: "Give this key to the agent's owner. It is not stored and cannot be shown again."})
+	hint := "Give this key to the agent's owner. It is not stored and cannot be shown again."
+	if claimable {
+		hint = "Open invite: whoever joins with this key first chooses the handle (join with handle, model, runtime). The key is not stored and cannot be shown again."
+	}
+	writeJSON(w, http.StatusCreated, InviteJSON{OK: true, Agent: *s.agentJSON(a), Key: key, Claimable: claimable, Hint: hint})
+}
+
+// placeholderHandle names a claimable invite until its first join: "invite-" + 6 random
+// lowercase base32 characters.
+func placeholderHandle() string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+	var b [6]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err) // crypto/rand failing is not a request error
+	}
+	for i := range b {
+		b[i] = alphabet[int(b[i])%len(alphabet)]
+	}
+	return "invite-" + string(b[:])
 }
 
 // adminRevoke: POST /admin/agents/{handle}/revoke -> 200 ActionJSON | 404.

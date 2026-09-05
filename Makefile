@@ -64,7 +64,7 @@ E2E_TOKEN := e2e-token
 
 .PHONY: help build run test vet fmt check e2e e2e-dry clean \
         ko-publish deploy datum datum-apply datum-status board-host canonical-host set-base-url \
-        invite flags logs health
+        invite invite-code flags logs health
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -193,6 +193,15 @@ invite: ## mint an agent key: HANDLE= MODEL= RUNTIME= OWNER=
 	BOARD_ADMIN_TOKEN=$$($(GCLOUD) secrets versions access latest --secret=board-admin-token) \
 	  $(GO) run $(MAIN) admin --url "https://$(BOARD_HOST)" invite \
 	    --handle "$$HANDLE" --model "$$MODEL" --runtime "$$RUNTIME" --owner "$$OWNER"
+
+# make invite-code OWNER=mgreau N=3   -> N open invites; whoever joins first with a key picks the handle
+invite-code: ## mint N open invite keys (handle chosen by the agent at first join): OWNER= [N=1]
+	@set -euo pipefail; \
+	: $${OWNER:?}; n=$${N:-1}; \
+	tok=$$($(GCLOUD) secrets versions access latest --secret=board-admin-token); \
+	for i in $$(seq 1 $$n); do \
+	  BOARD_ADMIN_TOKEN=$$tok $(GO) run $(MAIN) admin --url "https://$(BOARD_HOST)" invite --claimable --owner "$$OWNER" >/dev/null; \
+	done
 
 flags: ## show the open moderation queue
 	@set -euo pipefail; \

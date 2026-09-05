@@ -23,7 +23,7 @@ type scanner interface {
 
 // agentCols are the columns scanAgent expects, with the agents table aliased "a".
 const agentCols = `a.id, a.handle, a.model, a.runtime, a.owner, a.key_hash IS NOT NULL AND a.disabled_at IS NULL,
-	a.key_last_used_at, a.inbox_cursor, a.created_at, a.last_seen_at, a.disabled_at`
+	a.key_last_used_at, a.inbox_cursor, a.created_at, a.last_seen_at, a.disabled_at, a.handle_locked`
 
 // scanAgent reads agentCols.
 func scanAgent(sc scanner) (*Agent, error) {
@@ -32,7 +32,7 @@ func scanAgent(sc scanner) (*Agent, error) {
 		keyLast, created, seen, disabl sql.NullString
 	)
 	if err := sc.Scan(&a.ID, &a.Handle, &a.Model, &a.Runtime, &a.Owner, &a.HasKey,
-		&keyLast, &a.InboxCursor, &created, &seen, &disabl); err != nil {
+		&keyLast, &a.InboxCursor, &created, &seen, &disabl, &a.HandleLocked); err != nil {
 		return nil, err
 	}
 	var err error
@@ -83,8 +83,8 @@ func (s *Store) InviteAgent(ctx context.Context, in AgentInvite) (*Agent, string
 	defer s.rollback(tx)
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO agents (handle, model, runtime, owner, key_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		handle, in.Model, in.Runtime, in.Owner, hash, s.nowText())
+		`INSERT INTO agents (handle, model, runtime, owner, key_hash, created_at, handle_locked) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		handle, in.Model, in.Runtime, in.Owner, hash, s.nowText(), !in.Claimable)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, "", ErrDuplicate
@@ -99,6 +99,9 @@ func (s *Store) InviteAgent(ctx context.Context, in AgentInvite) (*Agent, string
 		return nil, "", fmt.Errorf("agent id: %w", err)
 	}
 	reason := fmt.Sprintf("owner=%s model=%s runtime=%s", in.Owner, in.Model, in.Runtime)
+	if in.Claimable {
+		reason = "open invite (handle chosen at first join) owner=" + in.Owner
+	}
 	if err := s.insertModEvent(ctx, tx, ModInvite, TargetAgent, handle, reason); err != nil {
 		return nil, "", err
 	}
@@ -111,6 +114,61 @@ func (s *Store) InviteAgent(ctx context.Context, in AgentInvite) (*Agent, string
 	}
 	s.afterWrite(ctx, true)
 	return a, raw, nil
+}
+
+// ClaimHandle gives a claimable invite its real handle (and optional model/runtime) and locks
+// it. Records mod_events(invite, "handle claimed ...") in the same transaction and snapshots
+// synchronously. Errors: *ValidationError (handle format), ErrDuplicate (handle taken),
+// ErrLocked (handle already chosen), ErrNotFound, ErrRevoked.
+func (s *Store) ClaimHandle(ctx context.Context, id int64, handle, model, runtime string) (*Agent, error) {
+	handle = strings.ToLower(strings.TrimSpace(handle))
+	if !ValidHandle(handle) {
+		return nil, &ValidationError{Field: "handle", Msg: "2-32 characters from [a-z0-9_-]"}
+	}
+	tx, err := s.beginWrite(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.rollback(tx)
+	cur, err := agentBy(ctx, tx, `a.id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	if cur.Disabled() {
+		return nil, ErrRevoked
+	}
+	if cur.HandleLocked {
+		return nil, ErrLocked
+	}
+	if model == "" {
+		model = cur.Model
+	}
+	if runtime == "" {
+		runtime = cur.Runtime
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE agents SET handle = ?, model = ?, runtime = ?, handle_locked = 1 WHERE id = ?`,
+		handle, model, runtime, id); err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrDuplicate
+		}
+		if isCheckViolation(err) {
+			return nil, &ValidationError{Field: "handle", Msg: "2-32 characters from [a-z0-9_-]"}
+		}
+		return nil, fmt.Errorf("claim handle: %w", err)
+	}
+	reason := fmt.Sprintf("handle claimed by the key holder (was %s) model=%s runtime=%s", cur.Handle, model, runtime)
+	if err := s.insertModEvent(ctx, tx, ModInvite, TargetAgent, handle, reason); err != nil {
+		return nil, err
+	}
+	a, err := agentBy(ctx, tx, `a.id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit claim: %w", err)
+	}
+	s.afterWrite(ctx, true)
+	return a, nil
 }
 
 // DescribeAgent sets the free-text model and runtime an agent reports about itself when it

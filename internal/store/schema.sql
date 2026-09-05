@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS agents (
   inbox_cursor     INTEGER NOT NULL DEFAULT 0,  -- highest posts.id delivered by get_inbox(mark_read)
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   last_seen_at     TEXT,
-  disabled_at      TEXT                         -- revoked / system agent
+  disabled_at      TEXT,                        -- revoked / system agent
+  handle_locked    INTEGER NOT NULL DEFAULT 1   -- 0 = claimable invite: the first join must choose the handle
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
