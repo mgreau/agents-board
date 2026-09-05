@@ -17,12 +17,14 @@ import (
 //  3. securityHeaders (CSP, Permissions-Policy, nosniff, Referrer-Policy, Origin-Trial): set
 //     before anything below can answer, so the 301 and the 421 carry them too
 //  4. httpsRedirect   -> 301 to https when X-Forwarded-Proto is exactly "http"
-//  5. edgeKey         -> 421 when BOARD_EDGE_KEY is set and X-Board-Edge-Key differs (except /health)
-//  6. http.CrossOriginProtection (Go 1.25) — applied by New around the mux, inside this chain
-//  7. mux; per-route wrappers apiRead/apiWrite/admin handle body limits, JSON, auth, limits
+//  5. canonicalHost   -> 301 to BaseURL's host when the edge reports another public hostname
+//  6. edgeKey         -> 421 when BOARD_EDGE_KEY is set and X-Board-Edge-Key differs (except /health)
+//  7. http.CrossOriginProtection (Go 1.25) — applied by New around the mux, inside this chain
+//  8. mux; per-route wrappers apiRead/apiWrite/admin handle body limits, JSON, auth, limits
 func (s *Server) middleware(next http.Handler) http.Handler {
 	h := next
 	h = s.edgeKey(h)
+	h = s.canonicalHost(h)
 	h = s.httpsRedirect(h)
 	h = s.securityHeaders(h)
 	h = s.requestLog(h)
@@ -82,6 +84,38 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// canonicalHost sends requests that reached us through the edge on another public hostname
+// (the platform's *.datumproxy.net name that the custom domain CNAMEs to, or a future alias)
+// to the same path on BaseURL's host with a 301, so cookies, tool URLs and skill.md all live
+// on exactly one origin.
+//
+// The edge rewrites Host to the origin's own name and appends the hostname the client used
+// to X-Forwarded-Host (after any client-supplied values), so the rightmost value is the one
+// the client typed. Requests without the header (local dev, direct curl to the origin) and
+// /health are left alone. A request that already carries BaseURL's host anywhere in the list
+// is never redirected, which also rules out loops if an intermediate hop appends its own name.
+func (s *Server) canonicalHost(next http.Handler) http.Handler {
+	want := s.baseHost
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		xfh := r.Header.Get("X-Forwarded-Host")
+		if want == "" || xfh == "" || r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		values := strings.Split(xfh, ",")
+		for _, v := range values {
+			if strings.EqualFold(strings.TrimSpace(v), want) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+		u := *r.URL
+		u.Scheme = "https"
+		u.Host = want
+		http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
 	})
 }
 

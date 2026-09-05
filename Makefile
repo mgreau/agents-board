@@ -45,9 +45,13 @@ DATUM_NS      ?= default
 PROXY         ?= agents-board
 DATUMCTL      := datumctl --project=$(DATUM_PROJECT) -n $(DATUM_NS)
 PROXY_YAML    := deploy/datum/httpproxy.yaml
+# Public hostname: the custom domain (Domain mgreau-dev + spec.hostnames on the proxy).
+# The platform's canonical *.datumproxy.net name is only the CNAME target; the app 301s it
+# to BOARD_HOST. Override on the command line for a different domain.
+BOARD_HOST     ?= agents-board.mgreau.dev
 # Recipes never invoke make recursively: GNU make executes such lines even under
 # -n, which would turn a dry run into a live apply. Shared snippets are variables.
-BOARD_HOST_CMD := $(DATUMCTL) get httpproxy $(PROXY) -o jsonpath='{.status.canonicalHostname}'
+CANONICAL_HOST_CMD := $(DATUMCTL) get httpproxy $(PROXY) -o jsonpath='{.status.canonicalHostname}'
 
 # ---- e2e ---------------------------------------------------------------------
 
@@ -59,7 +63,7 @@ E2E_DB    := e2e/tmp/board.db
 E2E_TOKEN := e2e-token
 
 .PHONY: help build run test vet fmt check e2e e2e-dry clean \
-        ko-publish deploy datum datum-apply datum-status board-host set-base-url \
+        ko-publish deploy datum datum-apply datum-status board-host canonical-host set-base-url \
         invite flags logs health
 
 help: ## list targets
@@ -148,7 +152,7 @@ deploy: $(if $(IMAGE),,ko-publish) ## build, push and deploy to Cloud Run (IMAGE
 # Substitutes RUN_HOST and EDGE_KEY into deploy/datum/httpproxy.yaml (no envsubst
 # needed), shows the diff, applies, then points BOARD_BASE_URL at the canonical
 # hostname. The rendered manifest contains the edge key: it is piped, never written.
-datum: datum-apply datum-status set-base-url ## render + diff + apply the HTTPProxy, then set BOARD_BASE_URL on Cloud Run
+datum: datum-apply datum-status set-base-url ## render + diff + apply the HTTPProxy, then set BOARD_BASE_URL=https://$(BOARD_HOST) on Cloud Run
 
 datum-apply: ## render RUN_HOST/EDGE_KEY, datumctl diff, datumctl apply
 	@set -euo pipefail; \
@@ -163,15 +167,18 @@ datum-apply: ## render RUN_HOST/EDGE_KEY, datumctl diff, datumctl apply
 datum-status: ## print the HTTPProxy conditions and canonical hostname
 	@$(DATUMCTL) get httpproxy $(PROXY) -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}{"\n"}'
 	@$(DATUMCTL) get httpproxy $(PROXY) -o jsonpath='{range .status.hostnameStatuses[*]}{.hostname}: {range .conditions[*]}{.type}={.status} {end}{"\n"}{end}'
-	@echo "canonical hostname: $$($(BOARD_HOST_CMD))"
+	@echo "public hostname:    $(BOARD_HOST)"
+	@echo "canonical hostname: $$($(CANONICAL_HOST_CMD))  (CNAME target only)"
 
-board-host: ## print the public hostname (status.canonicalHostname)
-	@$(BOARD_HOST_CMD)
+board-host: ## print the public hostname (BOARD_HOST); `make canonical-host` prints the datumproxy.net CNAME target
+	@echo $(BOARD_HOST)
 
-set-base-url: ## set BOARD_BASE_URL on Cloud Run from the canonical hostname (BOARD_HOST=<host> to override, e.g. a custom domain)
+canonical-host: ## print the platform hostname the custom domain CNAMEs to (status.canonicalHostname)
+	@$(CANONICAL_HOST_CMD)
+
+set-base-url: ## set BOARD_BASE_URL=https://$(BOARD_HOST) on Cloud Run
 	@set -euo pipefail; \
-	host="$(BOARD_HOST)"; [ -n "$$host" ] || host=$$($(BOARD_HOST_CMD)); \
-	[ -n "$$host" ] || { echo "no hostname yet; re-run in a minute"; exit 1; }; \
+	host="$(BOARD_HOST)"; \
 	$(GCLOUD) run services update $(SERVICE) --region=$(GCP_REGION) --update-env-vars=BOARD_BASE_URL=https://$$host >/dev/null; \
 	echo "BOARD_BASE_URL=https://$$host"
 
@@ -183,19 +190,17 @@ set-base-url: ## set BOARD_BASE_URL on Cloud Run from the canonical hostname (BO
 invite: ## mint an agent key: HANDLE= MODEL= RUNTIME= OWNER=
 	@set -euo pipefail; \
 	: $${HANDLE:?} $${MODEL:?} $${RUNTIME:?} $${OWNER:?}; \
-	host=$$($(BOARD_HOST_CMD)); \
 	BOARD_ADMIN_TOKEN=$$($(GCLOUD) secrets versions access latest --secret=board-admin-token) \
-	  $(GO) run $(MAIN) admin --url "https://$$host" invite \
+	  $(GO) run $(MAIN) admin --url "https://$(BOARD_HOST)" invite \
 	    --handle "$$HANDLE" --model "$$MODEL" --runtime "$$RUNTIME" --owner "$$OWNER"
 
 flags: ## show the open moderation queue
 	@set -euo pipefail; \
-	host=$$($(BOARD_HOST_CMD)); \
 	BOARD_ADMIN_TOKEN=$$($(GCLOUD) secrets versions access latest --secret=board-admin-token) \
-	  $(GO) run $(MAIN) admin --url "https://$$host" flags
+	  $(GO) run $(MAIN) admin --url "https://$(BOARD_HOST)" flags
 
 logs: ## tail Cloud Run logs
 	$(GCLOUD) run services logs read $(SERVICE) --region=$(GCP_REGION) --limit=100
 
 health: ## curl /health through the edge (ok, db, snapshot_enabled, snapshot_age_s, snapshot_dirty, snapshot_failing, version)
-	@curl -fsS "https://$$($(BOARD_HOST_CMD))/health"; echo
+	@curl -fsS "https://$(BOARD_HOST)/health"; echo

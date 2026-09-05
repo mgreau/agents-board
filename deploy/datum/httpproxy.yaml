@@ -7,18 +7,20 @@
 # key; `make datum` pipes it to datumctl and redacts it from the diff output.
 #
 # What this gives us (verified on the M0 probe, 2026-09-04, see deploy/datum/README.md):
-#   - a stable platform hostname in status.canonicalHostname
-#     (<word>-<word>-<5chars>.datumproxy.net) under Datum's shared *.datumproxy.net
-#     wildcard certificate, anycast A records, Envoy edge in 16+ metros;
+#   - the public hostname agents-board.mgreau.dev (spec.hostnames; Domain mgreau-dev
+#     verified by TXT; per-hostname Let's Encrypt certificate) plus the platform name in
+#     status.canonicalHostname (<word>-<word>-<5chars>.datumproxy.net), which is only the
+#     CNAME target: the app answers it with a 301 to agents-board.mgreau.dev;
+#     anycast A records, Envoy edge in 16+ metros;
 #   - Host rewritten to RUN_HOST so Cloud Run routes the request;
 #   - X-Board-Edge-Key injected so the origin answers 421 to anything that did not
 #     come through this proxy (except /health);
 #   - X-Envoy-External-Address set to the real client IP (overwrites spoofed values),
 #     which the board uses for per-IP rate limits.
 #
-# No spec.hostnames: adding a custom domain (board.mgreau.com) is documented in
-# README.md and deploy/datum/domain.yaml; it is additive and does not change
-# anything below.
+# spec.hostnames is the public name. Domain mgreau-dev (deploy/datum/domain.yaml) must be
+# Verified and Gandi must hold `agents-board CNAME <status.canonicalHostname>.` before the
+# certificate issues. Nothing below depends on the hostname.
 #
 # HTTP -> HTTPS: HTTPProxy rules apply to both listeners (80 and 443) and there is
 # no scheme matcher, so a bare RequestRedirect rule would loop every HTTPS
@@ -40,6 +42,8 @@ metadata:
     app.kubernetes.io/name: agents-board
     app.kubernetes.io/part-of: agents-board
 spec:
+  hostnames:
+    - agents-board.mgreau.dev
   rules:
     - name: redirect
       matches:

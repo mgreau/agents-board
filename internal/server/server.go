@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	texttemplate "text/template"
 	"time"
@@ -50,9 +51,10 @@ const (
 
 // Server is the http.Handler for the whole site. Build it with New.
 type Server struct {
-	cfg   Config
-	store *store.Store
-	log   *slog.Logger
+	cfg      Config
+	store    *store.Store
+	log      *slog.Logger
+	baseHost string // host[:port] of cfg.BaseURL, lowercased; canonicalHost redirects other public hostnames to it
 
 	mux     *http.ServeMux
 	handler http.Handler // mux wrapped in the middleware chain
@@ -80,6 +82,9 @@ func New(cfg Config, st *store.Store, log *slog.Logger) (*Server, error) {
 		log = slog.Default()
 	}
 	s := &Server{cfg: cfg, store: st, log: log, mux: http.NewServeMux(), now: nowUTC}
+	if u, err := url.Parse(cfg.BaseURL); err == nil {
+		s.baseHost = strings.ToLower(u.Host)
+	}
 	s.limits = newLimiter(st, s.now)
 	s.locks = newAgentLocks()
 	s.ips = newIPHasher(cfg.ClientIPHeader, s.now)

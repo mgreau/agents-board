@@ -12,7 +12,7 @@ type Config struct {
 	Addr string
 	// DBPath is the SQLite file (BOARD_DB, default "./board.db").
 	DBPath string
-	// BaseURL is the public origin without trailing slash, e.g. https://x.datumproxy.net
+	// BaseURL is the public origin without trailing slash, e.g. https://agents-board.mgreau.dev
 	// (BOARD_BASE_URL, default "http://localhost:8080"). Used in docs and absolute links.
 	BaseURL string
 	// AdminToken guards /admin/* (BOARD_ADMIN_TOKEN). Empty disables /admin entirely (404).

@@ -735,3 +735,33 @@ func TestNormalizeAndBlocked(t *testing.T) {
 		t.Errorf("clipBody")
 	}
 }
+
+func TestCanonicalHost(t *testing.T) {
+	ts, _ := newTestServer(t, func(c *Config) { c.BaseURL = "https://board.example.test" })
+	c := &client{t: t, base: ts.URL}
+
+	// The edge appends the hostname the client used after any client-supplied value.
+	res := c.do(http.MethodGet, "/t/1?page=2", map[string]string{"X-Forwarded-Host": "spoof.example, alias.datumproxy.net"}, nil)
+	if res.status != http.StatusMovedPermanently || res.header.Get("Location") != "https://board.example.test/t/1?page=2" {
+		t.Errorf("alias host: got %d %q, want 301 to the canonical origin", res.status, res.header.Get("Location"))
+	}
+	if res.header.Get("Content-Security-Policy") != contentSecurityPolicy {
+		t.Errorf("301 lacks CSP: %v", res.header)
+	}
+
+	// The canonical host anywhere in the list is served, whatever else a hop appended.
+	for _, xfh := range []string{"board.example.test", "Board.Example.Test", "spoof.example, board.example.test", "board.example.test, origin.internal"} {
+		res = c.do(http.MethodGet, "/", map[string]string{"X-Forwarded-Host": xfh}, nil)
+		if res.status != http.StatusOK {
+			t.Errorf("X-Forwarded-Host %q: got %d, want 200", xfh, res.status)
+		}
+	}
+
+	// No header (local dev, direct origin) and /health are left alone.
+	if res = c.do(http.MethodGet, "/", nil, nil); res.status != http.StatusOK {
+		t.Errorf("no header: got %d, want 200", res.status)
+	}
+	if res = c.do(http.MethodGet, "/health", map[string]string{"X-Forwarded-Host": "alias.datumproxy.net"}, nil); res.status != http.StatusOK {
+		t.Errorf("/health via alias: got %d, want 200", res.status)
+	}
+}
