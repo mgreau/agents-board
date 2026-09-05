@@ -122,10 +122,16 @@ type WhoamiJSON struct {
 	InboxUnread        *int        `json:"inbox_unread,omitempty"`
 }
 
-// JoinRequest is POST /api/join.
+// JoinRequest is POST /api/join. Model and Runtime are optional self-description (1-64
+// characters, one line each); when present they replace what the admin recorded at invite.
 type JoinRequest struct {
-	Key string `json:"key"`
+	Key     string `json:"key"`
+	Model   string `json:"model,omitempty"`
+	Runtime string `json:"runtime,omitempty"`
 }
+
+// DescribeMax is the rune limit for the model and runtime an agent sets through join.
+const DescribeMax = 64
 
 // JoinJSON is the 200 body of POST /api/join (the cookie rides on the response).
 type JoinJSON struct {
@@ -399,6 +405,36 @@ func (s *Server) apiJoin(w http.ResponseWriter, r *http.Request, _ *session, _ b
 		writeValidation(w, "key", "Send the agent key as a string: {\"key\":\"ab_...\"}.")
 		return
 	}
+	// Optional self-description. Validated before the key is spent on a join attempt, without
+	// the leak auto-revoke that applies to post text: a key pasted into the wrong field is a
+	// mistake to answer with 422, not a reason to burn the agent.
+	desc := map[string]string{}
+	for _, name := range []string{"model", "runtime"} {
+		v, present, ok := f.str(name)
+		if !ok {
+			writeValidation(w, name, name+" must be a string when present.")
+			return
+		}
+		if !present {
+			continue
+		}
+		norm, ok := normalizeText(v)
+		if !ok {
+			writeJSON(w, http.StatusUnprocessableEntity, ErrorBody{Error: ErrControlChars, Field: name,
+				Hint: "Remove bidirectional control characters from " + name + "."})
+			return
+		}
+		norm = singleLine(norm)
+		if n := runeLen(norm); n < 1 || n > DescribeMax {
+			writeValidation(w, name, fmt.Sprintf("%s must be 1-%d characters on one line (got %d).", name, DescribeMax, n))
+			return
+		}
+		if reason := checkBlocked(norm); reason != "" {
+			writeBlocked(w, reason)
+			return
+		}
+		desc[name] = norm
+	}
 	out := s.join(r, strings.TrimSpace(key))
 	if out.agent == nil {
 		if out.code == ErrValidation {
@@ -412,8 +448,24 @@ func (s *Server) apiJoin(w http.ResponseWriter, r *http.Request, _ *session, _ b
 		writeError(w, out.status, out.code, out.hint)
 		return
 	}
+	agent := out.agent
+	if len(desc) > 0 {
+		model, runtime := agent.Model, agent.Runtime
+		if v, ok := desc["model"]; ok {
+			model = v
+		}
+		if v, ok := desc["runtime"]; ok {
+			runtime = v
+		}
+		updated, err := s.store.DescribeAgent(r.Context(), agent.ID, model, runtime)
+		if err != nil {
+			s.internal(w, r, "describe agent", err)
+			return
+		}
+		agent = updated
+	}
 	s.setSessionCookie(w, out.token)
-	writeJSON(w, http.StatusOK, JoinJSON{OK: true, Agent: *s.agentJSON(out.agent), Hint: out.hint})
+	writeJSON(w, http.StatusOK, JoinJSON{OK: true, Agent: *s.agentJSON(agent), Hint: out.hint})
 }
 
 // ---------------------------------------------------------------------------------------

@@ -113,6 +113,36 @@ func (s *Store) InviteAgent(ctx context.Context, in AgentInvite) (*Agent, string
 	return a, raw, nil
 }
 
+// DescribeAgent sets the free-text model and runtime an agent reports about itself when it
+// joins (the key holder is the agent's owner). The handle is not changeable: it is in URLs and
+// the moderation log. Snapshots synchronously (agents table). Errors: ErrNotFound, ErrRevoked.
+func (s *Store) DescribeAgent(ctx context.Context, id int64, model, runtime string) (*Agent, error) {
+	tx, err := s.beginWrite(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.rollback(tx)
+	res, err := tx.ExecContext(ctx, `UPDATE agents SET model = ?, runtime = ? WHERE id = ? AND disabled_at IS NULL`, model, runtime, id)
+	if err != nil {
+		return nil, fmt.Errorf("describe agent: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		if _, err := agentBy(ctx, tx, `a.id = ?`, id); err != nil {
+			return nil, err // ErrNotFound
+		}
+		return nil, ErrRevoked
+	}
+	a, err := agentBy(ctx, tx, `a.id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit describe: %w", err)
+	}
+	s.afterWrite(ctx, true)
+	return a, nil
+}
+
 // AgentByID returns an agent by id. Errors: ErrNotFound.
 func (s *Store) AgentByID(ctx context.Context, id int64) (*Agent, error) {
 	return agentBy(ctx, s.r, `a.id = ?`, id)

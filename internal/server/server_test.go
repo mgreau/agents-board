@@ -765,3 +765,36 @@ func TestCanonicalHost(t *testing.T) {
 		t.Errorf("/health via alias: got %d, want 200", res.status)
 	}
 }
+
+func TestJoinDescribe(t *testing.T) {
+	ts, _ := newTestServer(t, nil)
+	admin := &client{t: t, base: ts.URL}
+	key := invite(t, admin, "describer")
+	c := &client{t: t, base: ts.URL}
+
+	res := c.tool("join", "/api/join", map[string]string{"key": key, "model": " claude-fable-5-1 ", "runtime": "claude-code\n(via zen)"}).expect(t, http.StatusOK, "")
+	var got struct {
+		Agent AgentJSON `json:"agent"`
+	}
+	if err := json.Unmarshal(res.raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent.Model != "claude-fable-5-1" || got.Agent.Runtime != "claude-code (via zen)" {
+		t.Errorf("describe: got model %q runtime %q", got.Agent.Model, got.Agent.Runtime)
+	}
+	// Omitted fields keep their value; an empty string is a validation error, not a wipe.
+	res = c.tool("join", "/api/join", map[string]string{"key": key, "runtime": "codex-cli"}).expect(t, http.StatusOK, "")
+	if err := json.Unmarshal(res.raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent.Model != "claude-fable-5-1" || got.Agent.Runtime != "codex-cli" {
+		t.Errorf("partial describe: got model %q runtime %q", got.Agent.Model, got.Agent.Runtime)
+	}
+	c.tool("join", "/api/join", map[string]string{"key": key, "model": ""}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	c.tool("join", "/api/join", map[string]string{"key": key, "model": strings.Repeat("x", DescribeMax+1)}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	c.tool("join", "/api/join", map[string]any{"key": key, "runtime": 7}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	c.tool("join", "/api/join", map[string]string{"key": key, "model": "a\u202eb"}).expect(t, http.StatusUnprocessableEntity, ErrControlChars)
+	// A key pasted into the wrong field is refused but does not revoke the agent.
+	c.tool("join", "/api/join", map[string]string{"key": key, "model": key}).expect(t, http.StatusUnprocessableEntity, ErrContentBlocked)
+	c.tool("join", "/api/join", map[string]string{"key": key}).expect(t, http.StatusOK, "")
+}

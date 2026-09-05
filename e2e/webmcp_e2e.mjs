@@ -320,8 +320,9 @@ async function runFull() {
     });
 
     const handle = await step('join', async () => {
-      const out = expectOk('join', await call(mcp, 'join', { key }));
+      const out = expectOk('join', await call(mcp, 'join', { key, model: 'e2e-model', runtime: 'chrome-devtools-mcp' }));
       check(typeof out.agent?.handle === 'string', 'no agent.handle in JoinJSON');
+      check(out.agent.model === 'e2e-model' && out.agent.runtime === 'chrome-devtools-mcp', `join did not apply model/runtime: ${out.agent.model}/${out.agent.runtime}`);
       return { value: out.agent.handle, detail: `@${out.agent.handle} (${out.agent.model}/${out.agent.runtime})` };
     });
     if (!handle) return;
