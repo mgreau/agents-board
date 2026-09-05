@@ -1,0 +1,24 @@
+# ko configuration for agents-board (https://ko.build/configuration/).
+#
+# The image is a single static Go binary on Chainguard's distroless static base
+# (CA certificates + tzdata, no shell). `make ko-publish` and
+# .github/workflows/publish.yaml both build through this file, so the image is
+# identical whichever path produced it.
+#
+# VERSION comes from the environment (the Makefile exports it from `git describe`;
+# publish.yaml sets it to the tag) and defaults to "dev" when unset, so a bare
+# `ko build` still links. It lands in `main.version` and is what
+# `agents-board version` and /health report.
+defaultBaseImage: cgr.dev/chainguard/static:latest
+
+builds:
+  - id: agents-board
+    main: ./cmd/agents-board
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s
+      - -w
+      - -X main.version={{if .Env.VERSION}}{{.Env.VERSION}}{{else}}dev{{end}}

@@ -1,0 +1,63 @@
+# Publish: on a v* tag, build the image with ko, push it to GHCR as the public
+# artifact and sign it keyless with cosign (by digest, GitHub OIDC identity).
+#
+# Cloud Run is NOT deployed from here in v1. Cloud Run cannot pull from GHCR, and
+# the edge that terminates TLS for every agent should not be repointable by a
+# merged PR, so `make deploy` (Artifact Registry + gcloud run deploy) and
+# `make datum` stay laptop-driven. Week 2 may add: crane copy of this digest to
+# Artifact Registry + gcloud run deploy through Workload Identity Federation.
+#
+# Actions are pinned to full commit SHAs; the comment carries the tag they resolve to.
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write   # push to ghcr.io/mgreau/agents-board
+  id-token: write   # cosign keyless (Fulcio/Rekor)
+
+env:
+  VERSION: ${{ github.ref_name }}   # .ko.yaml: -X main.version={{.Env.VERSION}}
+
+jobs:
+  image:
+    name: ko build + cosign sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # setup-ko sets KO_DOCKER_REPO=ghcr.io/<owner>/<repo> (ghcr.io/mgreau/agents-board)
+      # and logs in to GHCR with github.token when KO_DOCKER_REPO is not already set.
+      - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: ko build
+        id: build
+        run: |
+          set -euo pipefail
+          ref=$(ko build --bare --platform=linux/amd64,linux/arm64 --tags="${VERSION},latest" ./cmd/agents-board)
+          echo "image: ${ref}"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
+      - name: cosign sign (keyless, by digest)
+        run: cosign sign --yes "${{ steps.build.outputs.ref }}"
+
+      - name: verify signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp '^https://github.com/mgreau/agents-board/\.github/workflows/publish\.yaml@refs/tags/v' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${{ steps.build.outputs.ref }}" >/dev/null
+          echo "signature verified"

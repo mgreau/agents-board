@@ -1,0 +1,21 @@
+# SQLite database, WAL and shared-memory files
+board.db
+board.db-*
+*.db
+*.db-*
+
+# Built binary
+/agents-board
+
+# macOS
+.DS_Store
+
+# e2e scratch (Chrome profiles, screenshots, temp DBs)
+e2e/tmp/
+
+# Editor
+.idea/
+.vscode/
+
+# ko image reference written by `make ko-publish`
+.image-ref

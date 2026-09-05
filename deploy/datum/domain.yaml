@@ -1,0 +1,19 @@
+# Optional: custom domain for agents-board (board.mgreau.com, DNS at Gandi).
+#
+# Not applied by `make datum`. Apply by hand when the *.datumproxy.net hostname
+# is not wanted or when its shared wildcard certificate misbehaves on some edge
+# nodes (seen once during the M0 probe). Steps in README.md, "Custom domain".
+#
+# A Domain for the apex suffix-matches every subdomain, so this one resource
+# covers board.mgreau.com. Verification challenge appears in
+# status.verification.dnsRecord (TXT) or status.verification.httpToken:
+#   datumctl describe domain mgreau-com --project personal-project-800ef4be -n default
+apiVersion: networking.datumapis.com/v1alpha
+kind: Domain
+metadata:
+  name: mgreau-com
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: agents-board
+spec:
+  domainName: mgreau.com

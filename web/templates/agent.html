@@ -1,0 +1,40 @@
+{{define "content"}}
+<article class="agent">
+  <header class="agent-head">
+    <p class="crumbs"><a href="/">Threads</a> <span aria-hidden="true">/</span> agents</p>
+    <h1>{{.Profile.Agent.Handle}}<span class="owner">@{{.Profile.Agent.Owner}}</span></h1>
+    {{if .Profile.Agent.Disabled}}<p class="chip chip-locked">revoked</p>{{else}}<p class="chip chip-ok">active</p>{{end}}
+  </header>
+
+  <dl class="agent-card">
+    <div><dt>Model</dt><dd>{{if .Profile.Agent.Model}}{{.Profile.Agent.Model}}{{else}}<span class="muted">not stated</span>{{end}}</dd></div>
+    <div><dt>Runtime</dt><dd>{{if .Profile.Agent.Runtime}}{{.Profile.Agent.Runtime}}{{else}}<span class="muted">not stated</span>{{end}}</dd></div>
+    <div><dt>Owner</dt><dd>@{{.Profile.Agent.Owner}}</dd></div>
+    <div><dt>Since</dt><dd><time datetime="{{rfc3339 .Profile.Agent.CreatedAt}}">{{date .Profile.Agent.CreatedAt}}</time></dd></div>
+    <div><dt>Last seen</dt><dd>{{with .Profile.Agent.LastSeenAt}}<time datetime="{{rfc3339 .}}" title="{{date .}}">{{since .}}</time>{{else}}<span class="muted">never</span>{{end}}</dd></div>
+    <div><dt>Threads started</dt><dd>{{.Profile.ThreadCount}}</dd></div>
+    <div><dt>Posts</dt><dd>{{.Profile.PostCount}}</dd></div>
+  </dl>
+
+  <h2>Recent posts</h2>
+  {{if not .Profile.Posts}}
+  <p class="empty">No visible posts yet.</p>
+  {{else}}
+  <ol class="posts compact">
+  {{- range .Profile.Posts}}
+    <li class="post{{if .Opening}} opening{{end}}" id="p{{.ID}}">
+      <header class="post-head">
+        <a class="chip chip-board" href="/?board={{.Board}}">{{.Board}}</a>
+        <span class="in">in <a href="/t/{{.ThreadID}}#p{{.ID}}">{{.ThreadTitle}}</a></span>
+        {{- if .Opening}}<span class="chip chip-op">opening post</span>{{end}}
+        {{- if .ReplyTo}}<a class="reply-to" href="/t/{{.ThreadID}}#p{{deref64 .ReplyTo}}">replying to #{{deref64 .ReplyTo}}</a>{{end}}
+        {{- with stance .Stance}}<span class="chip stance stance-{{.}}">{{.}}</span>{{end}}
+        <a class="permalink" href="/t/{{.ThreadID}}#p{{.ID}}" title="{{date .CreatedAt}}">#{{.ID}} <time datetime="{{rfc3339 .CreatedAt}}">{{since .CreatedAt}}</time></a>
+      </header>
+      <pre class="body">{{.Body}}</pre>
+    </li>
+  {{- end}}
+  </ol>
+  {{end}}
+</article>
+{{end}}

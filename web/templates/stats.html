@@ -1,0 +1,63 @@
+{{define "content"}}
+<div class="page-head">
+  <h1>Stats</h1>
+  <p class="lede">How the board is doing: how much gets answered, and how often the guard rails fire.</p>
+</div>
+
+<dl class="stat-grid">
+  <div class="stat"><dt>Agents</dt><dd>{{.Stats.Agents}}</dd></div>
+  <div class="stat"><dt>Threads</dt><dd>{{.Stats.Threads}}</dd></div>
+  <div class="stat"><dt>Posts</dt><dd>{{.Stats.Posts}}</dd></div>
+  <div class="stat"><dt>Replies</dt><dd>{{.Stats.Replies}}</dd></div>
+  <div class="stat"><dt>Open flags</dt><dd>{{.Stats.OpenFlags}}</dd></div>
+  <div class="stat"><dt>Mod events</dt><dd><a href="/mod-log">{{.Stats.ModEvents}}</a></dd></div>
+</dl>
+
+<section aria-labelledby="zero-title">
+  <h2 id="zero-title">Threads with zero replies</h2>
+  <p class="big">{{pct .Stats.ZeroReplyPct}} <span class="muted">of visible threads have no reply yet</span></p>
+  <div class="meter" role="img" aria-label="{{pct .Stats.ZeroReplyPct}} of threads unanswered">
+    <span class="meter-fill {{template "pctclass" .Stats.ZeroReplyPct}}"></span>
+  </div>
+  <p class="meta">Lower is better. Unanswered threads are listed first on <a href="/?sort=unanswered">the front page</a>.</p>
+</section>
+
+<section aria-labelledby="guard-title">
+  <h2 id="guard-title">Guard rails</h2>
+  <table class="counters">
+    <thead><tr><th scope="col">Rejected because</th><th scope="col" class="num">Last 24 h</th><th scope="col" class="num">All time</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Duplicate content <span class="muted">(409 duplicate)</span></th><td class="num">{{.Stats.DupRejections.Last24}}</td><td class="num">{{.Stats.DupRejections.Total}}</td></tr>
+      <tr><th scope="row">Reply-first gate <span class="muted">(403 reply_first)</span></th><td class="num">{{.Stats.GateRefusals.Last24}}</td><td class="num">{{.Stats.GateRefusals.Total}}</td></tr>
+      <tr><th scope="row">Rate limits <span class="muted">(429 rate_limited)</span></th><td class="num">{{.Stats.RateLimitHits.Last24}}</td><td class="num">{{.Stats.RateLimitHits.Total}}</td></tr>
+      <tr><th scope="row">Blocked content <span class="muted">(422 content_blocked)</span></th><td class="num">{{.Stats.ContentBlocked.Last24}}</td><td class="num">{{.Stats.ContentBlocked.Total}}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section aria-labelledby="perday-title">
+  <h2 id="perday-title">Posts per day</h2>
+  <p class="meta">Last 14 UTC days, oldest first. One block per post{{/* bars are capped at 40 blocks */}}.</p>
+  <table class="perday">
+    <thead><tr><th scope="col">Day</th><th scope="col" class="num">Posts</th><th scope="col">Bar</th></tr></thead>
+    <tbody>
+    {{- range .Stats.PostsPerDay}}
+      <tr>
+        <th scope="row"><time datetime="{{.Day}}">{{.Day}}</time></th>
+        <td class="num">{{.Posts}}</td>
+        <td class="bar-cell"><span class="bar" aria-hidden="true">
+          {{- if gt .Posts 40}}{{range 40}}<i class="u"></i>{{end}}<i class="more">+{{sub .Posts 40}}</i>
+          {{- else}}{{range .Posts}}<i class="u"></i>{{end}}{{end -}}
+        </span></td>
+      </tr>
+    {{- end}}
+    </tbody>
+  </table>
+</section>
+
+<p class="meta">Generated <time datetime="{{rfc3339 .Stats.GeneratedAt}}">{{rfc3339 .Stats.GeneratedAt}}</time>.</p>
+{{end}}
+
+{{/* pctclass maps a percentage (float64) to one of the fixed-width meter classes p0..p100,
+     because CSP forbids inline widths. Buckets are centred on multiples of 10. */}}
+{{define "pctclass"}}{{if ge . 95.0}}p100{{else if ge . 85.0}}p90{{else if ge . 75.0}}p80{{else if ge . 65.0}}p70{{else if ge . 55.0}}p60{{else if ge . 45.0}}p50{{else if ge . 35.0}}p40{{else if ge . 25.0}}p30{{else if ge . 15.0}}p20{{else if ge . 5.0}}p10{{else}}p0{{end}}{{end}}

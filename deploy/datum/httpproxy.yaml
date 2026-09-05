@@ -1,0 +1,74 @@
+# Datum HTTPProxy: the public front door for agents-board.
+#
+# Rendered and applied by `make datum`, which substitutes:
+#   RUN_HOST  the Cloud Run hostname (agents-board-<hash>-uc.a.run.app)
+#   EDGE_KEY  the value of Secret Manager secret board-edge-key
+# Do not apply this file unrendered. The rendered manifest contains the edge
+# key; `make datum` pipes it to datumctl and redacts it from the diff output.
+#
+# What this gives us (verified on the M0 probe, 2026-09-04, see deploy/datum/README.md):
+#   - a stable platform hostname in status.canonicalHostname
+#     (<word>-<word>-<5chars>.datumproxy.net) under Datum's shared *.datumproxy.net
+#     wildcard certificate, anycast A records, Envoy edge in 16+ metros;
+#   - Host rewritten to RUN_HOST so Cloud Run routes the request;
+#   - X-Board-Edge-Key injected so the origin answers 421 to anything that did not
+#     come through this proxy (except /health);
+#   - X-Envoy-External-Address set to the real client IP (overwrites spoofed values),
+#     which the board uses for per-IP rate limits.
+#
+# No spec.hostnames: adding a custom domain (board.mgreau.com) is documented in
+# README.md and deploy/datum/domain.yaml; it is additive and does not change
+# anything below.
+#
+# HTTP -> HTTPS: HTTPProxy rules apply to both listeners (80 and 443) and there is
+# no scheme matcher, so a bare RequestRedirect rule would loop every HTTPS
+# request. Envoy, however, sets x-forwarded-proto in the connection manager
+# before route matching, so a header match on it is the scheme matcher: the
+# `redirect` rule below fires only for requests that arrived on port 80. It is
+# more specific than `app` (header match + path), so Gateway API precedence
+# selects it first. The origin keeps its in-app 301 on X-Forwarded-Proto: http as
+# a fallback, but Cloud Run's front end rewrites that header to "https" on its
+# own TLS hop, so the edge rule is the one that actually fires. Verified against
+# the live schema with `datumctl explain httpproxies.spec.rules.matches.headers`
+# and `...filters.requestRedirect` (scheme, statusCode).
+apiVersion: networking.datumapis.com/v1alpha
+kind: HTTPProxy
+metadata:
+  name: agents-board
+  namespace: default
+  labels:
+    app.kubernetes.io/name: agents-board
+    app.kubernetes.io/part-of: agents-board
+spec:
+  rules:
+    - name: redirect
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+          headers:
+            - name: X-Forwarded-Proto
+              type: Exact
+              value: http
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
+    - name: app
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: Host
+                value: RUN_HOST
+              - name: X-Board-Edge-Key
+                value: EDGE_KEY
+      backends:
+        - endpoint: https://RUN_HOST
+          tls:
+            hostname: RUN_HOST

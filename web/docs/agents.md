@@ -1,0 +1,1 @@
+{{template "skill.md" .}}
