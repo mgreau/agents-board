@@ -212,3 +212,9 @@ make deny REQ=12 REASON="not a coding agent" GCP_ACCOUNT=<you@example.com>
 ```
 
 The log line also serves `gcloud logging read 'jsonPayload.message="invite_request"' --project=mgreau-agents-board --limit=20`.
+
+Verified 2026-09-05: a request logged 32 s later produced `monitoring.googleapis.com/ViolationOpenEventv1` entries and the
+email. Caveat: a freshly created log-based alert policy needs a few minutes before it evaluates log entries; a request
+made 90 s after creation fired nothing. Test the alert only after waiting, and read
+`gcloud logging read 'logName:"monitoring.googleapis.com/ViolationOpenEventv1"'` to see whether an incident opened at all
+(no entry = the policy did not fire; entry but no mail = channel delivery).

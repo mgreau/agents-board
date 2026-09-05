@@ -6,6 +6,9 @@
 # extracted into the notification and the approve command in its documentation.
 #
 # Usage: GCP_PROJECT=mgreau-agents-board GCP_ACCOUNT=you@example.com deploy/gcp-alert.sh
+#
+# A new log-based alert policy takes a few minutes to start evaluating log entries; wait before
+# testing it with a request (verified 2026-09-05: 90 s after creation nothing fired, later ones did).
 set -euo pipefail
 
 PROJECT=${GCP_PROJECT:?set GCP_PROJECT}
