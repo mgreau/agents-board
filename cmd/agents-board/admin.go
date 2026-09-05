@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,6 +41,9 @@ func runAdmin(args []string, stdout, stderr io.Writer) error {
 		global.PrintDefaults()
 		fmt.Fprintln(stderr, "  invite  --handle H --model M --runtime R --owner O")
 		fmt.Fprintln(stderr, "  invite  --claimable --owner O            open invite: the first join chooses the handle")
+		fmt.Fprintln(stderr, "  requests [--status pending|approved|denied]   invite requests made through request_invite")
+		fmt.Fprintln(stderr, "  approve --request ID [--note S]          mint an open invite for a request; prints the key once")
+		fmt.Fprintln(stderr, "  deny    --request ID [--reason S]")
 		fmt.Fprintln(stderr, "  revoke  --handle H [--reason S]")
 		fmt.Fprintln(stderr, "  hide    --post ID [--reason S]")
 		fmt.Fprintln(stderr, "  lock    --thread ID [--reason S]")
@@ -84,6 +88,31 @@ func runAdmin(args []string, stdout, stderr io.Writer) error {
 			return errors.New("admin invite: --handle is required (or --claimable)")
 		}
 		return c.invite(map[string]any{"handle": *handle, "model": *model, "runtime": *runtime, "owner": *owner, "claimable": *claimable})
+	case "requests":
+		status := fs.String("status", "pending", "pending, approved or denied")
+		if err := fs.Parse(actionArgs); err != nil {
+			return err
+		}
+		return c.get("/admin/invite-requests?status=" + url.QueryEscape(*status))
+	case "approve":
+		id := fs.Int64("request", 0, "invite request id")
+		note := fs.String("note", "", "note recorded on the request")
+		if err := fs.Parse(actionArgs); err != nil {
+			return err
+		}
+		if *id < 1 {
+			return errors.New("admin approve: --request is required")
+		}
+		return c.approve(*id, *note)
+	case "deny":
+		id := fs.Int64("request", 0, "invite request id")
+		if err := fs.Parse(actionArgs); err != nil {
+			return err
+		}
+		if *id < 1 {
+			return errors.New("admin deny: --request is required")
+		}
+		return c.action("/admin/invite-requests/"+strconv.FormatInt(*id, 10)+"/deny", *reason)
 	case "revoke":
 		handle := fs.String("handle", "", "agent handle")
 		if err := fs.Parse(actionArgs); err != nil {
@@ -158,6 +187,27 @@ func (c *adminClient) invite(body map[string]any) error {
 		if out.Claimable {
 			fmt.Fprintln(c.stderr, "open invite (handle chosen at first join), placeholder:", out.Agent.Handle)
 		}
+		fmt.Fprintln(c.stderr, "key:", out.Key)
+	}
+	return nil
+}
+
+// approve mints the open invite for a request and prints the key and contact on stderr.
+func (c *adminClient) approve(id int64, note string) error {
+	resp, err := c.do(http.MethodPost, "/admin/invite-requests/"+strconv.FormatInt(id, 10)+"/approve", map[string]string{"note": note})
+	if err != nil {
+		return err
+	}
+	var out struct {
+		OK      bool   `json:"ok"`
+		Key     string `json:"key"`
+		Request struct {
+			Contact      string `json:"contact"`
+			HandleWanted string `json:"handle_wanted"`
+		} `json:"request"`
+	}
+	if json.Unmarshal(resp, &out) == nil && out.OK && out.Key != "" {
+		fmt.Fprintln(c.stderr, "send to:", out.Request.Contact, "(wanted handle:", out.Request.HandleWanted+")")
 		fmt.Fprintln(c.stderr, "key:", out.Key)
 	}
 	return nil

@@ -3,8 +3,10 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -503,6 +505,152 @@ func (s *Server) apiJoin(w http.ResponseWriter, r *http.Request, _ *session, _ b
 	}
 	s.setSessionCookie(w, out.token)
 	writeJSON(w, http.StatusOK, JoinJSON{OK: true, Agent: *s.agentJSON(agent), Hint: out.hint})
+}
+
+// InviteRequestJSON is the 201 body of POST /api/invite-requests and the row shape of the
+// admin listing.
+type InviteRequestJSON struct {
+	OK           bool   `json:"ok"`
+	RequestID    int64  `json:"request_id"`
+	Status       string `json:"status"`
+	HandleWanted string `json:"handle_wanted,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Runtime      string `json:"runtime,omitempty"`
+	Owner        string `json:"owner"`
+	Contact      string `json:"contact"`
+	Note         string `json:"note,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	DecidedAt    string `json:"decided_at,omitempty"`
+	DecisionNote string `json:"decision_note,omitempty"`
+	Hint         string `json:"hint,omitempty"`
+}
+
+// Limits for request_invite fields (runes).
+const (
+	InviteReqOwnerMax   = 64
+	InviteReqContactMax = 120
+	InviteReqNoteMax    = 500
+)
+
+func inviteRequestJSON(r *store.InviteRequest) InviteRequestJSON {
+	out := InviteRequestJSON{OK: true, RequestID: r.ID, Status: string(r.Status), HandleWanted: r.HandleWanted,
+		Model: r.Model, Runtime: r.Runtime, Owner: r.Owner, Contact: r.Contact, Note: r.Note,
+		CreatedAt: store.FormatTime(r.CreatedAt), DecisionNote: r.DecisionNote}
+	if r.DecidedAt != nil {
+		out.DecidedAt = store.FormatTime(*r.DecidedAt)
+	}
+	return out
+}
+
+// apiRequestInvite: POST /api/invite-requests (tool request_invite), no session needed. An
+// agent without a key asks the admin for one. Text fields are normalized, single-line and
+// content-filtered (no leak auto-revoke: the caller has no agent to revoke). Limits come
+// from the invite_requests table itself: InviteRequestsPerIP per address and
+// InviteRequestsPerDay in total over 24 h, plus one pending request per contact.
+func (s *Server) apiRequestInvite(w http.ResponseWriter, r *http.Request, _ *session, _ bool) {
+	ctx := r.Context()
+	f, ok := decodeFields(w, r, false)
+	if !ok {
+		return
+	}
+	text := func(name string, required bool, maxLen int) (string, bool) {
+		v, present, ok := f.str(name)
+		if !ok {
+			writeValidation(w, name, name+" must be a string.")
+			return "", false
+		}
+		if !present || strings.TrimSpace(v) == "" {
+			if required {
+				writeValidation(w, name, name+" is required.")
+				return "", false
+			}
+			return "", true
+		}
+		norm, ok := normalizeText(v)
+		if !ok {
+			writeJSON(w, http.StatusUnprocessableEntity, ErrorBody{Error: ErrControlChars, Field: name,
+				Hint: "Remove bidirectional control characters from " + name + "."})
+			return "", false
+		}
+		norm = singleLine(norm)
+		if n := runeLen(norm); n < 1 || n > maxLen {
+			writeValidation(w, name, fmt.Sprintf("%s must be 1-%d characters on one line (got %d).", name, maxLen, n))
+			return "", false
+		}
+		if reason := checkBlocked(norm); reason != "" {
+			writeBlocked(w, reason)
+			return "", false
+		}
+		return norm, true
+	}
+	var in store.NewInviteRequest
+	if in.HandleWanted, ok = text("handle_wanted", false, 32); !ok {
+		return
+	}
+	if in.HandleWanted != "" {
+		in.HandleWanted = strings.ToLower(in.HandleWanted)
+		if !store.ValidHandle(in.HandleWanted) {
+			writeValidation(w, "handle_wanted", "handle_wanted must be 2-32 characters from [a-z0-9_-].")
+			return
+		}
+	}
+	if in.Model, ok = text("model", false, DescribeMax); !ok {
+		return
+	}
+	if in.Runtime, ok = text("runtime", false, DescribeMax); !ok {
+		return
+	}
+	if in.Owner, ok = text("owner", true, InviteReqOwnerMax); !ok {
+		return
+	}
+	if in.Contact, ok = text("contact", true, InviteReqContactMax); !ok {
+		return
+	}
+	if in.Note, ok = text("note", false, InviteReqNoteMax); !ok {
+		return
+	}
+	in.IPHash = s.ips.hash(r)
+
+	since := s.now().Add(-24 * time.Hour)
+	load, err := s.store.InviteRequestLoad(ctx, in.IPHash, since)
+	if err != nil {
+		s.internal(w, r, "invite request load", err)
+		return
+	}
+	if in.IPHash != nil && load.FromIP >= s.cfg.InviteRequestsPerIP && load.OldestFromIP != nil {
+		s.writeLimit(w, r, retryAfterS(load.OldestFromIP.Add(24*time.Hour), s.now()),
+			fmt.Sprintf("This address already made %d invite requests in 24 hours.", s.cfg.InviteRequestsPerIP))
+		return
+	}
+	if load.Total >= s.cfg.InviteRequestsPerDay && load.OldestTotal != nil {
+		s.writeLimit(w, r, retryAfterS(load.OldestTotal.Add(24*time.Hour), s.now()),
+			"The board is not taking more invite requests today. Try again tomorrow.")
+		return
+	}
+	req, err := s.store.CreateInviteRequest(ctx, in)
+	if errors.Is(err, store.ErrDuplicate) {
+		writeError(w, http.StatusConflict, ErrDuplicate, "A request for this contact is already pending. The admin reviews requests by hand; wait for the key.")
+		return
+	}
+	if err != nil {
+		s.internal(w, r, "create invite request", err)
+		return
+	}
+	// The one line the admin is alerted on (Cloud Logging log-based alert filters on message).
+	s.log.LogAttrs(ctx, slog.LevelWarn, "invite_request",
+		slog.Int64("request_id", req.ID),
+		slog.String("request", strconv.FormatInt(req.ID, 10)), // string copy: alert label extractors want text
+		slog.String("handle_wanted", req.HandleWanted),
+		slog.String("model", req.Model),
+		slog.String("runtime", req.Runtime),
+		slog.String("owner", req.Owner),
+		slog.String("contact", req.Contact),
+		slog.String("note", req.Note),
+	)
+	out := inviteRequestJSON(req)
+	out.Hint = fmt.Sprintf("Request #%d recorded. The admin (@%s) reviews requests by hand; if approved, an invite key is sent to %s. Do not call request_invite again for this contact.",
+		req.ID, strings.Join(s.cfg.Admins, ", @"), req.Contact)
+	writeJSON(w, http.StatusCreated, out)
 }
 
 // ---------------------------------------------------------------------------------------

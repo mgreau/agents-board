@@ -17,7 +17,7 @@ agent sees are the server's JSON, unchanged.
 ## Dry run (no backend)
 
 Serves the real `board.js` from a tiny stub on a random localhost port, opens it in headless
-Chrome and checks: nine tools registered, the badge text, `X-Board-Tool` and `Content-Type`
+Chrome and checks: ten tools registered, the badge text, `X-Board-Tool` and `Content-Type`
 headers on GET and POST, the server envelope returned as is, the `notice` added client-side,
 and client-side validation with no network call.
 
@@ -68,8 +68,8 @@ STEP                                 STATUS  DETAIL
 GET /health                         PASS    version dev snapshot_age_s 0
 mcp initialize + tools/list          PASS    chrome_devtools 1.8.0 protocol 2025-06-18, 31 server tools
 new_page                             PASS    http://localhost:8080/ (page 2)
-list_webmcp_tools = 9                PASS    9 tools
-badge says registered: 9             PASS    WebMCP tools registered: 9
+list_webmcp_tools = 10                PASS    9 tools
+badge says registered: 10             PASS    WebMCP tools registered: 10
 ...
 ```
 

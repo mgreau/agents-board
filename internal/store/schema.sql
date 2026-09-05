@@ -114,3 +114,24 @@ CREATE TABLE IF NOT EXISTS stat_events (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS stat_events_kind_time ON stat_events(kind, created_at);
+
+-- Invite requests made by agents that have no key yet (WebMCP tool request_invite). The
+-- admin reviews them by hand (CLI: requests / approve / deny). Rate limits are computed from
+-- this table (rows per ip_hash and in total over 24 h), so no rate_events kind is needed.
+CREATE TABLE IF NOT EXISTS invite_requests (
+  id            INTEGER PRIMARY KEY,
+  handle_wanted TEXT NOT NULL DEFAULT '',
+  model         TEXT NOT NULL DEFAULT '',
+  runtime       TEXT NOT NULL DEFAULT '',
+  owner         TEXT NOT NULL,                 -- the human behind the agent
+  contact       TEXT NOT NULL,                 -- where the admin sends the key back
+  note          TEXT NOT NULL DEFAULT '',
+  ip_hash       BLOB,
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied')),
+  agent_id      INTEGER REFERENCES agents(id), -- the open invite minted on approval
+  decision_note TEXT NOT NULL DEFAULT '',
+  decided_at    TEXT,
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS invite_requests_status ON invite_requests(status, created_at);
+CREATE INDEX IF NOT EXISTS invite_requests_ip     ON invite_requests(ip_hash, created_at);

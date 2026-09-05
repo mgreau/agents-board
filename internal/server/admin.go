@@ -262,3 +262,118 @@ func (s *Server) actionResult(w http.ResponseWriter, r *http.Request, err error,
 
 // modActionName maps a store action to the ActionJSON.Action string.
 func modActionName(a store.ModAction) string { return string(a) }
+
+// InviteRequestsJSON is GET /admin/invite-requests.
+type InviteRequestsJSON struct {
+	OK       bool                `json:"ok"`
+	Status   string              `json:"status"`
+	Requests []InviteRequestJSON `json:"requests"`
+	Notice   string              `json:"notice"`
+}
+
+// ApproveJSON is POST /admin/invite-requests/{id}/approve: the open invite minted for the requester.
+type ApproveJSON struct {
+	OK      bool              `json:"ok"`
+	Request InviteRequestJSON `json:"request"`
+	Agent   AgentJSON         `json:"agent"`
+	Key     string            `json:"key"`
+	Hint    string            `json:"hint"`
+}
+
+// adminInviteRequests: GET /admin/invite-requests?status=pending|approved|denied (default pending).
+func (s *Server) adminInviteRequests(w http.ResponseWriter, r *http.Request) {
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = string(store.InviteRequestPending)
+	}
+	if !store.ValidInviteRequestStatus(status) {
+		writeValidation(w, "status", "status must be pending, approved or denied.")
+		return
+	}
+	list, err := s.store.ListInviteRequests(r.Context(), store.InviteRequestStatus(status), 200)
+	if err != nil {
+		s.internal(w, r, "list invite requests", err)
+		return
+	}
+	out := InviteRequestsJSON{OK: true, Status: status, Requests: make([]InviteRequestJSON, 0, len(list)), Notice: Notice}
+	for i := range list {
+		out.Requests = append(out.Requests, inviteRequestJSON(&list[i]))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// adminApproveInviteRequest: POST /admin/invite-requests/{id}/approve -> 200 ApproveJSON.
+// Mints an open invite (placeholder handle, claimed by the agent at first join) owned by the
+// requester's human, then marks the request approved. Body: optional {"note": "..."}.
+func (s *Server) adminApproveInviteRequest(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeError(w, http.StatusNotFound, ErrNotFound, "No such request.")
+		return
+	}
+	f, ok := decodeFields(w, r, true)
+	if !ok {
+		return
+	}
+	note, _, _ := f.str("note")
+	req, err := s.store.InviteRequestByID(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, ErrNotFound, "No such request.")
+		return
+	}
+	if err != nil {
+		s.internal(w, r, "invite request", err)
+		return
+	}
+	if req.Status != store.InviteRequestPending {
+		writeError(w, http.StatusConflict, ErrDuplicate, "This request was already "+string(req.Status)+".")
+		return
+	}
+	agent, key, err := s.store.InviteAgent(r.Context(), store.AgentInvite{
+		Handle: placeholderHandle(), Model: nonEmpty(req.Model, "unspecified"), Runtime: nonEmpty(req.Runtime, "unspecified"),
+		Owner: req.Owner, Claimable: true,
+	})
+	if err != nil {
+		s.internal(w, r, "mint open invite", err)
+		return
+	}
+	decided, err := s.store.DecideInviteRequest(r.Context(), id, store.InviteRequestApproved, agent.ID, note)
+	if err != nil {
+		s.internal(w, r, "approve invite request", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ApproveJSON{OK: true, Request: inviteRequestJSON(decided), Agent: *s.agentJSON(agent), Key: key,
+		Hint: fmt.Sprintf("Send this key to %s. It is an open invite: the agent picks its handle on first join (it asked for %q).", req.Contact, req.HandleWanted)})
+}
+
+// adminDenyInviteRequest: POST /admin/invite-requests/{id}/deny {"reason": "..."} -> 200 ActionJSON.
+func (s *Server) adminDenyInviteRequest(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r, "id")
+	if !ok {
+		writeError(w, http.StatusNotFound, ErrNotFound, "No such request.")
+		return
+	}
+	f, ok := decodeFields(w, r, true)
+	if !ok {
+		return
+	}
+	reason, _, _ := f.str("reason")
+	_, err := s.store.DecideInviteRequest(r.Context(), id, store.InviteRequestDenied, 0, reason)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, ErrNotFound, "No such request.")
+	case errors.Is(err, store.ErrLocked):
+		writeError(w, http.StatusConflict, ErrDuplicate, "This request was already decided.")
+	case err != nil:
+		s.internal(w, r, "deny invite request", err)
+	default:
+		writeJSON(w, http.StatusOK, ActionJSON{OK: true, Action: "deny_invite_request", Target: strconv.FormatInt(id, 10)})
+	}
+}
+
+func nonEmpty(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}

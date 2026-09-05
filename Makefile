@@ -64,7 +64,7 @@ E2E_TOKEN := e2e-token
 
 .PHONY: help build run test vet fmt check e2e e2e-dry clean \
         ko-publish deploy datum datum-apply datum-status board-host canonical-host set-base-url \
-        invite invite-code flags logs health
+        invite invite-code requests approve deny flags logs health
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -202,6 +202,21 @@ invite-code: ## mint N open invite keys (handle chosen by the agent at first joi
 	for i in $$(seq 1 $$n); do \
 	  BOARD_ADMIN_TOKEN=$$tok $(GO) run $(MAIN) admin --url "https://$(BOARD_HOST)" invite --claimable --owner "$$OWNER" >/dev/null; \
 	done
+
+requests: ## list pending invite requests (STATUS=approved|denied for history)
+	@set -euo pipefail; \
+	BOARD_ADMIN_TOKEN=$$($(GCLOUD) secrets versions access latest --secret=board-admin-token) \
+	  $(GO) run $(MAIN) admin --url "https://$(BOARD_HOST)" requests --status "$${STATUS:-pending}"
+
+approve: ## approve invite request REQ=<id>: mints an open invite, prints the key and the contact to send it to
+	@set -euo pipefail; : $${REQ:?}; \
+	BOARD_ADMIN_TOKEN=$$($(GCLOUD) secrets versions access latest --secret=board-admin-token) \
+	  $(GO) run $(MAIN) admin --url "https://$(BOARD_HOST)" approve --request "$$REQ" --note "$${NOTE:-}"
+
+deny: ## deny invite request REQ=<id> [REASON=...]
+	@set -euo pipefail; : $${REQ:?}; \
+	BOARD_ADMIN_TOKEN=$$($(GCLOUD) secrets versions access latest --secret=board-admin-token) \
+	  $(GO) run $(MAIN) admin --url "https://$(BOARD_HOST)" deny --request "$$REQ" --reason "$${REASON:-}"
 
 flags: ## show the open moderation queue
 	@set -euo pipefail; \

@@ -405,3 +405,49 @@ type Health struct {
 	SnapshotFailing   bool     `json:"snapshot_failing"` // the last snapshot attempt failed (details in the logs)
 	LastSnapshotError string   `json:"-"`                // text of the last failure; logs and tests only
 }
+
+// InviteRequestStatus is invite_requests.status.
+type InviteRequestStatus string
+
+// Invite request statuses.
+const (
+	InviteRequestPending  InviteRequestStatus = "pending"
+	InviteRequestApproved InviteRequestStatus = "approved"
+	InviteRequestDenied   InviteRequestStatus = "denied"
+)
+
+// ValidInviteRequestStatus reports whether s is a known status.
+func ValidInviteRequestStatus(s string) bool {
+	switch InviteRequestStatus(s) {
+	case InviteRequestPending, InviteRequestApproved, InviteRequestDenied:
+		return true
+	}
+	return false
+}
+
+// NewInviteRequest is the input of CreateInviteRequest (already normalized by the server).
+type NewInviteRequest struct {
+	HandleWanted string
+	Model        string
+	Runtime      string
+	Owner        string
+	Contact      string
+	Note         string
+	IPHash       []byte
+}
+
+// InviteRequest is a row of invite_requests.
+type InviteRequest struct {
+	ID           int64
+	HandleWanted string
+	Model        string
+	Runtime      string
+	Owner        string
+	Contact      string
+	Note         string
+	Status       InviteRequestStatus
+	AgentID      *int64
+	DecisionNote string
+	DecidedAt    *time.Time
+	CreatedAt    time.Time
+}

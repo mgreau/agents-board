@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -33,16 +34,22 @@ type Config struct {
 	Admins []string
 	// Version is the build version string (set by main from ldflags; "dev" by default).
 	Version string
+	// InviteRequestsPerDay caps request_invite calls: per client address and in total over 24 h
+	// (BOARD_INVITE_REQUESTS_PER_IP, default 3; BOARD_INVITE_REQUESTS_PER_DAY, default 20).
+	InviteRequestsPerIP  int
+	InviteRequestsPerDay int
 }
 
 // Defaults for Config.
 const (
-	DefaultAddr           = ":8080"
-	DefaultDBPath         = "./board.db"
-	DefaultBaseURL        = "http://localhost:8080"
-	DefaultClientIPHeader = "X-Envoy-External-Address"
-	DefaultSnapshotObject = "board.db"
-	DefaultAdmins         = "mgreau"
+	DefaultAddr            = ":8080"
+	DefaultDBPath          = "./board.db"
+	DefaultBaseURL         = "http://localhost:8080"
+	DefaultClientIPHeader  = "X-Envoy-External-Address"
+	DefaultSnapshotObject  = "board.db"
+	DefaultAdmins          = "mgreau"
+	DefaultInviteReqPerIP  = 3
+	DefaultInviteReqPerDay = 20
 )
 
 // ConfigFromEnv builds a Config from getenv (os.Getenv in main, a map lookup in tests).
@@ -55,15 +62,17 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		return def
 	}
 	cfg := Config{
-		Addr:           get("BOARD_ADDR", DefaultAddr),
-		DBPath:         get("BOARD_DB", DefaultDBPath),
-		BaseURL:        strings.TrimRight(get("BOARD_BASE_URL", DefaultBaseURL), "/"),
-		AdminToken:     strings.TrimSpace(getenv("BOARD_ADMIN_TOKEN")),
-		EdgeKey:        strings.TrimSpace(getenv("BOARD_EDGE_KEY")),
-		SnapshotBucket: strings.TrimSpace(getenv("BOARD_SNAPSHOT_BUCKET")),
-		SnapshotObject: get("BOARD_SNAPSHOT_OBJECT", DefaultSnapshotObject),
-		OTToken:        strings.TrimSpace(getenv("BOARD_OT_TOKEN")),
-		Version:        "dev",
+		Addr:                 get("BOARD_ADDR", DefaultAddr),
+		DBPath:               get("BOARD_DB", DefaultDBPath),
+		BaseURL:              strings.TrimRight(get("BOARD_BASE_URL", DefaultBaseURL), "/"),
+		AdminToken:           strings.TrimSpace(getenv("BOARD_ADMIN_TOKEN")),
+		EdgeKey:              strings.TrimSpace(getenv("BOARD_EDGE_KEY")),
+		SnapshotBucket:       strings.TrimSpace(getenv("BOARD_SNAPSHOT_BUCKET")),
+		SnapshotObject:       get("BOARD_SNAPSHOT_OBJECT", DefaultSnapshotObject),
+		InviteRequestsPerIP:  intEnv(getenv, "BOARD_INVITE_REQUESTS_PER_IP", DefaultInviteReqPerIP),
+		InviteRequestsPerDay: intEnv(getenv, "BOARD_INVITE_REQUESTS_PER_DAY", DefaultInviteReqPerDay),
+		OTToken:              strings.TrimSpace(getenv("BOARD_OT_TOKEN")),
+		Version:              "dev",
 	}
 	// BOARD_CLIENT_IP_HEADER: unset -> default; set to "" explicitly -> RemoteAddr. Since
 	// os.Getenv cannot tell unset from empty, the sentinel value "none" also means RemoteAddr.
@@ -91,3 +100,16 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 
 // SnapshotsEnabled reports whether a GCS bucket is configured.
 func (c Config) SnapshotsEnabled() bool { return c.SnapshotBucket != "" }
+
+// intEnv reads a positive integer from the environment, falling back to def when unset or invalid.
+func intEnv(getenv func(string) string, name string, def int) int {
+	v := strings.TrimSpace(getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}

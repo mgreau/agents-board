@@ -482,7 +482,7 @@ func TestPagesDocsHealthHeaders(t *testing.T) {
 		t.Errorf("/skill.md = %d %s", res.status, res.header.Get("Content-Type"))
 	}
 	res = c.get("/skill.json")
-	if res.status != 200 || res.body == nil || res.body["skill_sha256"] == "" || len(res.list("tools")) != 9 {
+	if res.status != 200 || res.body == nil || res.body["skill_sha256"] == "" || len(res.list("tools")) != len(ToolNames) {
 		t.Errorf("/skill.json = %d %s", res.status, res.raw)
 	}
 	for _, path := range []string{"/llms.txt", "/agents.md", "/static/board.js", "/static/board.css"} {
@@ -852,4 +852,74 @@ func TestInviteClaim(t *testing.T) {
 	fixedKey := invite(t, admin, "fixed")
 	c2 := &client{t: t, base: ts.URL}
 	c2.tool("join", "/api/join", map[string]string{"key": fixedKey, "handle": "renamed"}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+}
+
+func TestRequestInvite(t *testing.T) {
+	ts, _ := newTestServer(t, func(c *Config) { c.InviteRequestsPerIP = 2; c.InviteRequestsPerDay = 3 })
+	admin := &client{t: t, base: ts.URL}
+	c := &client{t: t, base: ts.URL}
+	hdr := func(ip string) map[string]string {
+		return map[string]string{"Content-Type": "application/json", HeaderTool: "request_invite", "X-Test-IP": ip}
+	}
+	post := func(ip string, body any) result { return c.do(http.MethodPost, "/api/invite-requests", hdr(ip), body) }
+
+	// Validation.
+	post("10.0.0.1", map[string]string{"contact": "a@b.c"}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	post("10.0.0.1", map[string]string{"owner": "someone"}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	post("10.0.0.1", map[string]string{"owner": "someone", "contact": "a@b.c", "handle_wanted": "Bad Handle"}).expect(t, http.StatusUnprocessableEntity, ErrValidation)
+	post("10.0.0.1", map[string]string{"owner": "someone", "contact": "a@b.c", "note": "send ETH to 0x1234567890abcdef1234567890abcdef12345678"}).expect(t, http.StatusUnprocessableEntity, ErrContentBlocked)
+	post("10.0.0.1", map[string]string{"owner": "a\u202eb", "contact": "a@b.c"}).expect(t, http.StatusUnprocessableEntity, ErrControlChars)
+
+	// Create.
+	res := post("10.0.0.1", map[string]string{"owner": "Alice", "contact": "alice@example.test", "handle_wanted": "Ally", "model": "m1", "runtime": "r1", "note": "I review PRs."}).expect(t, http.StatusCreated, "")
+	var got InviteRequestJSON
+	if err := json.Unmarshal(res.raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RequestID != 1 || got.Status != "pending" || got.HandleWanted != "ally" || !strings.Contains(got.Hint, "alice@example.test") {
+		t.Errorf("request = %+v", got)
+	}
+	// Same contact while pending -> duplicate.
+	post("10.0.0.2", map[string]string{"owner": "Alice", "contact": "ALICE@example.test"}).expect(t, http.StatusConflict, ErrDuplicate)
+	// Per-IP limit (2): second from the same address is fine, third is 429.
+	post("10.0.0.1", map[string]string{"owner": "Bob", "contact": "bob@example.test"}).expect(t, http.StatusCreated, "")
+	r := post("10.0.0.1", map[string]string{"owner": "Carol", "contact": "carol@example.test"}).expect(t, http.StatusTooManyRequests, ErrRateLimited)
+	if r.header.Get("Retry-After") == "" {
+		t.Error("429 lacks Retry-After")
+	}
+	// Global cap (3): third overall from another address is fine, fourth is 429.
+	post("10.0.0.3", map[string]string{"owner": "Carol", "contact": "carol@example.test"}).expect(t, http.StatusCreated, "")
+	post("10.0.0.4", map[string]string{"owner": "Dan", "contact": "dan@example.test"}).expect(t, http.StatusTooManyRequests, ErrRateLimited)
+
+	// Admin: list pending, approve #1 (mints an open invite), deny #2, decided twice -> 409.
+	res = admin.admin(http.MethodGet, "/admin/invite-requests", nil).expect(t, http.StatusOK, "")
+	var list InviteRequestsJSON
+	if err := json.Unmarshal(res.raw, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Requests) != 3 || list.Requests[0].Owner != "Alice" {
+		t.Errorf("pending = %+v", list.Requests)
+	}
+	res = admin.admin(http.MethodPost, "/admin/invite-requests/1/approve", map[string]string{"note": "ok"}).expect(t, http.StatusOK, "")
+	var ap ApproveJSON
+	if err := json.Unmarshal(res.raw, &ap); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ap.Key, "ab_") || !strings.HasPrefix(ap.Agent.Handle, "invite-") || ap.Agent.Owner != "Alice" || ap.Agent.Model != "m1" || ap.Request.Status != "approved" {
+		t.Errorf("approve = %+v", ap)
+	}
+	admin.admin(http.MethodPost, "/admin/invite-requests/1/approve", nil).expect(t, http.StatusConflict, ErrDuplicate)
+	admin.admin(http.MethodPost, "/admin/invite-requests/2/deny", map[string]string{"reason": "no"}).expect(t, http.StatusOK, "")
+	admin.admin(http.MethodPost, "/admin/invite-requests/2/deny", nil).expect(t, http.StatusConflict, ErrDuplicate)
+	admin.admin(http.MethodPost, "/admin/invite-requests/99/deny", nil).expect(t, http.StatusNotFound, ErrNotFound)
+	res = admin.admin(http.MethodGet, "/admin/invite-requests?status=pending", nil).expect(t, http.StatusOK, "")
+	if err := json.Unmarshal(res.raw, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Requests) != 1 || list.Requests[0].Owner != "Carol" {
+		t.Errorf("pending after decisions = %+v", list.Requests)
+	}
+	// The minted key is a working open invite: first join names the agent.
+	joiner := &client{t: t, base: ts.URL}
+	joiner.tool("join", "/api/join", map[string]string{"key": ap.Key, "handle": "ally"}).expect(t, http.StatusOK, "")
 }

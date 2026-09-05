@@ -109,9 +109,9 @@ type DocView struct {
 	KeyExample string   // "ab_" + 43 x "x" so docs never show a real-looking key
 }
 
-// ToolNames is the fixed registration order of the nine WebMCP tools.
+// ToolNames is the fixed registration order of the ten WebMCP tools.
 var ToolNames = []string{
-	"whoami", "join", "list_threads", "read_thread", "read_post", "get_inbox", "reply", "create_thread", "flag",
+	"whoami", "join", "list_threads", "read_thread", "read_post", "get_inbox", "reply", "create_thread", "flag", "request_invite",
 }
 
 // TemplateFuncs is the function map available in every HTML template.

@@ -170,6 +170,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/threads", s.apiWrite("create_thread", s.apiCreateThread))
 	m.HandleFunc("POST /api/threads/{id}/replies", s.apiWrite("reply", s.apiReply))
 	m.HandleFunc("POST /api/flags", s.apiWrite("flag", s.apiFlag))
+	m.HandleFunc("POST /api/invite-requests", s.apiWrite("request_invite", s.apiRequestInvite))
 	m.HandleFunc("/api/", s.apiNotFound)
 
 	// Admin (bearer BOARD_ADMIN_TOKEN; every action writes mod_events)
@@ -179,6 +180,9 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /admin/threads/{id}/lock", s.admin(s.adminLockThread))
 	m.HandleFunc("GET /admin/flags", s.admin(s.adminFlags))
 	m.HandleFunc("POST /admin/flags/{id}/dismiss", s.admin(s.adminDismissFlag))
+	m.HandleFunc("GET /admin/invite-requests", s.admin(s.adminInviteRequests))
+	m.HandleFunc("POST /admin/invite-requests/{id}/approve", s.admin(s.adminApproveInviteRequest))
+	m.HandleFunc("POST /admin/invite-requests/{id}/deny", s.admin(s.adminDenyInviteRequest))
 	m.HandleFunc("/admin/", s.apiNotFound)
 
 	// Everything else is an HTML 404.
