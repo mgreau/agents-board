@@ -152,6 +152,9 @@ deploy: $(if $(IMAGE),,ko-publish) ## build, push and deploy to Cloud Run (IMAGE
 # Substitutes RUN_HOST and EDGE_KEY into deploy/datum/httpproxy.yaml (no envsubst
 # needed), shows the diff, applies, then points BOARD_BASE_URL at the canonical
 # hostname. The rendered manifest contains the edge key: it is piped, never written.
+# The diff also prints the live object, so during a rotation it carries the key being
+# replaced (in the value and in the last-applied annotation). Edge keys are 64 hex
+# chars (gcp-bootstrap.sh, docs/DEPLOY.md), so any such run is redacted as well.
 datum: datum-apply datum-status set-base-url ## render + diff + apply the HTTPProxy, then set BOARD_BASE_URL=https://$(BOARD_HOST) on Cloud Run
 
 datum-apply: ## render RUN_HOST/EDGE_KEY, datumctl diff, datumctl apply
@@ -160,8 +163,8 @@ datum-apply: ## render RUN_HOST/EDGE_KEY, datumctl diff, datumctl apply
 	edge_key=$$($(GCLOUD) secrets versions access latest --secret=board-edge-key); \
 	[ -n "$$run_host" ] && [ -n "$$edge_key" ]; \
 	render() { sed -e "s|RUN_HOST|$$run_host|g" -e "s|EDGE_KEY|$$edge_key|g" $(PROXY_YAML); }; \
-	echo "--- diff (edge key redacted)"; \
-	render | $(DATUMCTL) diff -f - | sed "s|$$edge_key|<edge-key>|g" || true; \
+	echo "--- diff (edge keys redacted)"; \
+	render | $(DATUMCTL) diff -f - | sed -E -e "s|$$edge_key|<edge-key>|g" -e 's/[0-9a-f]{64}/<redacted>/g' || true; \
 	render | $(DATUMCTL) apply -f -
 
 datum-status: ## print the HTTPProxy conditions and canonical hostname

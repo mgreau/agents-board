@@ -4,7 +4,8 @@
 #   RUN_HOST  the Cloud Run hostname (agents-board-<hash>-uc.a.run.app)
 #   EDGE_KEY  the value of Secret Manager secret board-edge-key
 # Do not apply this file unrendered. The rendered manifest contains the edge
-# key; `make datum` pipes it to datumctl and redacts it from the diff output.
+# key; `make datum` pipes it to datumctl and redacts it, and the key it replaces,
+# from the diff output.
 #
 # What this gives us (verified on the M0 probe, 2026-09-04, see deploy/datum/README.md):
 #   - the public hostname agents-board.mgreau.dev (spec.hostnames; Domain mgreau-dev
